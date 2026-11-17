@@ -62,6 +62,7 @@ The `tests` part runs every time I click Save. If a change would break a test, S
 5. **Tested with new connections**: SSH and Claude Code over Tailscale both still worked.
 6. **Turned off key expiry for the server** in the admin console: Machines → `...` → Disable key expiry.
 7. **Turned on Tailscale SSH** (see the section below).
+8. **Restarted the server** to finish an update and test that everything comes back (see "Restart test").
 
 ## Tailscale SSH
 
@@ -110,6 +111,37 @@ Recovery options, easiest first:
 3. **Enable the Alibaba port 22 rule** — sshd and my key file work through the public IP.
 
 Options 2 and 3 need my SSH key file and the server's `authorized_keys`, so I keep them.
+
+## Restart test
+
+The login message said `*** System restart required ***`. The reason was a `libc6` update (`/var/run/reboot-required.pkgs`), the basic library almost every program uses. A restart is also the real test of the boot-order risk: will everything come back without me?
+
+Before the restart, I checked that each service starts on boot:
+
+| Service | Starts on boot? |
+| ------- | --------------- |
+| `tailscaled` | Yes, and Tailscale SSH stays on (`RunSSH: true`) |
+| `ssh.socket` | Yes. Ubuntu 24.04 starts sshd when a connection arrives, so `ssh` showing "disabled" is normal |
+| `caddy`, `xray` | Yes |
+| `clay` | Yes. Its unit waits for Tailscale (`After=tailscaled.service`) and retries every 3 seconds forever (`Restart=always`, `StartLimitIntervalSec=0`), so the boot-order risk is handled |
+
+Then, from a normal terminal (not Claude Code, because Claude Code goes through the server):
+
+```
+ssh root@100.90.238.88
+reboot
+```
+
+After about 2 minutes I logged in again and checked:
+
+```
+systemctl is-active tailscaled caddy xray clay ssh.socket
+cat /var/run/reboot-required
+```
+
+Result: all five `active`, and `No such file or directory` (no restart needed anymore). Ports 22, 443, 8080 and 8787 listened on the same addresses as before, and Claude Code worked again.
+
+**Typo trap:** I first typed `tailscailed`, and it said `inactive`. `systemctl is-active` does not say "no such service"; it just says `inactive`. When one result looks wrong, check the spelling first, or use `systemctl status <name>`, which says `could not be found`.
 
 ## What broke and how I fixed it
 
