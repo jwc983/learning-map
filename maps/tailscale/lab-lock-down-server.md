@@ -61,6 +61,55 @@ The `tests` part runs every time I click Save. If a change would break a test, S
 4. **Disabled the public port 22 rule** in the Alibaba Cloud firewall. Kept 443 (proxy) and 8080 (reading page).
 5. **Tested with new connections**: SSH and Claude Code over Tailscale both still worked.
 6. **Turned off key expiry for the server** in the admin console: Machines → `...` → Disable key expiry.
+7. **Turned on Tailscale SSH** (see the section below).
+
+## Tailscale SSH
+
+Before, sshd checked my SSH key file. Now Tailscale checks my Tailscale identity, but only on the Tailscale road (`100.90.238.88:22`). The public road is still closed by the Alibaba firewall, and sshd keeps running behind it as a backup.
+
+The `ssh` part of the policy. The first rule was already there; I added the second:
+
+```json
+"ssh": [
+    {
+        "action": "check",
+        "src":    ["autogroup:member"],
+        "dst":    ["autogroup:self"],
+        "users":  ["autogroup:nonroot", "root"],
+    },
+    {
+        "action": "accept",
+        "src":    ["autogroup:member"],
+        "dst":    ["tag:server"],
+        "users":  ["root"],
+    },
+],
+```
+
+- `autogroup:self` does not cover tagged servers, so the server needed its own rule.
+- `accept` logs in at once. `check` asks me to confirm in a browser every 12 hours, which also breaks scripts and AI tools that use SSH. `accept` is fine here because the grants already limit port 22 to my Mac.
+
+Then, **on the server**:
+
+```
+tailscale set --ssh
+```
+
+It warned that my SSH session would disconnect, because Tailscale takes over all SSH traffic on the Tailscale road. I typed `y`, the session dropped, and a new login worked.
+
+Test, with key files and passwords forbidden. Plain sshd would refuse this; only Tailscale SSH lets it in:
+
+```
+ssh -o PubkeyAuthentication=no -o PasswordAuthentication=no root@100.90.238.88
+```
+
+Recovery options, easiest first:
+
+1. **VNC** — always works.
+2. **From VNC, run `tailscale set --ssh=false`** — sshd and my key file handle the Tailscale road again.
+3. **Enable the Alibaba port 22 rule** — sshd and my key file work through the public IP.
+
+Options 2 and 3 need my SSH key file and the server's `authorized_keys`, so I keep them.
 
 ## What broke and how I fixed it
 
@@ -70,6 +119,8 @@ The `tests` part runs every time I click Save. If a change would break a test, S
 | Save failed after editing the first rule | `"ip": [""]`: an empty string instead of `"*"` | Changed it to `"ip": ["*"]` |
 | Save failed: `invalid character '{' at start of object name` | The line `// "tests": [` was still a comment, so Tailscale never saw the opening of the list | Removed the `//` |
 | The server still had a key expiry date even though it was tagged | It was tagged **after** joining, so it kept its old expiry | Disabled key expiry by hand |
+| `tailscale set --ssh` said: "does not run in sandboxed Tailscale GUI builds" | I ran it on my **Mac**, not the server. The Mac's App Store Tailscale can't be an SSH server, and doesn't need to be. | Logged in to the server first. Check the prompt: `❯` with `~/projects/...` is the Mac; `root@iZ...#` is the server. |
+| `tailscale set --ssh` printed "aborted, no changes made" | The question was `[y/N]`; pressing Enter means **No** | Ran it again and typed `y` |
 
 ## Things that surprised me
 
@@ -84,6 +135,8 @@ The `tests` part runs every time I click Save. If a change would break a test, S
 3. **Make the emergency way in before you close the door**, and test it.
 4. **Servers need identities that don't expire**: tags plus disabled key expiry. People's devices should still expire.
 5. **Check, don't assume**: inspect key expiry and listening ports yourself.
+6. **Read the warning before you answer**: Tailscale said exactly what would happen, and it happened.
+7. **One file controls everything**: `grants` decide who can reach the server; `ssh` rules decide who can log in. Removing a device in the admin console ends its SSH access at once.
 
 ## Reminders
 
@@ -94,4 +147,4 @@ The `tests` part runs every time I click Save. If a change would break a test, S
 
 - Disable the public **TCP 80** firewall rule. Nothing listens on port 80.
 - Remove the unused `autogroup:internet` rule, if I never use an exit node.
-- Try **Tailscale SSH**, so the tailnet identity decides who can log in.
+- Add `sshTests` to the policy, so a bad edit to the `ssh` rules is refused on Save.
