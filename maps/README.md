@@ -15,3 +15,4 @@ Generated learning maps. One folder per topic; regenerate with `/learning-map <t
 | [Programming](programming/README.md) | A precise, executable description of a process that turns human intent into instructions a machine follows exactly. | 2026-10-23 |
 | [Story](story/README.md) | An account of someone who wants something, meets resistance, and is changed by their choices — the mind's format for turning events into meaning. | 2026-10-28 |
 | [故事](story/README.zh.md) | 一个人想要某样东西、遭遇阻力并因选择而改变——人类心智把事件变成可记忆意义的形状。 | 2026-10-28 |
+| [Tailscale](tailscale/README.md) | A private network that joins your devices wherever they are, where each device is reached by who it belongs to, not where it sits on the internet. | 2026-11-15 |
