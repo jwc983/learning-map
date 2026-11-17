@@ -69,6 +69,7 @@ The `tests` part runs every time I click Save. If a change would break a test, S
 8. **Restarted the server** to finish an update and test that everything comes back (see "Restart test").
 9. **Added `sshTests`** to protect the `ssh` rules (see the Tailscale SSH section).
 10. **Cleaned up unused openings**: disabled the TCP 80 firewall rule (nothing listens on 80), turned off "Running as exit node" on the iPhone, and removed the `autogroup:internet` grant.
+11. **Fixed my SSH shortcut** so `ssh server` works through Tailscale (see "Names").
 
 ## Tailscale SSH
 
@@ -167,6 +168,79 @@ cat /var/run/reboot-required
 
 Result: all five `active`, and `No such file or directory` (no restart needed anymore). Ports 22, 443, 8080 and 8787 listened on the same addresses as before, and Claude Code worked again.
 
+**Typo trap:** I first typed `tailscailed`, and it said `inactive`. `systemctl is-active` does not say "no such service"; it just says `inactive`. When one result looks wrong, check the spelling first, or use `systemctl status <name>`, which says `could not be found`.
+
+## How Claude Code reaches Anthropic
+
+Anthropic sees the server's **public IP**, not `100.90.238.88:8787`. The reason: there are **two separate connections**, and clay sits in the middle.
+
+```
+Claude Code on my Mac (100.121.243.64)
+   │  1. Tailscale tunnel, encrypted
+   ▼
+clay on the server, listening on 100.90.238.88:8787
+   │  2. clay makes a NEW connection, directly (no proxy, not through xray),
+   │     from the server's private address 172.18.13.225
+   ▼
+Alibaba's network swaps in the public IP (<public-ip>)   ← NAT
+   │  3. HTTPS, encrypted
+   ▼
+Anthropic API (160.79.104.10:443)
+```
+
+Live connections on the server (`ss -tnp | grep clay`) showed both halves:
+
+```
+100.90.238.88:8787  ->  100.121.243.64:52283   ← my Mac talking to clay
+172.18.13.225:56346 ->  160.79.104.10:443      ← clay talking to Anthropic
+```
+
+- **Connection 1 is inside the tailnet.** `100.90.238.88` exists only in my tailnet; the internet doesn't know it. `8787` is the door clay *listens* on.
+- **Connection 2 is on the public internet.** clay reads my request and sends its own new request. Anthropic isn't in my tailnet, so clay must use the server's normal internet road. An *outgoing* connection uses a random free port (like `56346`), not 8787.
+- **NAT** (Network Address Translation): the server only knows its private address `172.18.13.225`; Alibaba's network replaces it with the public IP on the way out, like a home router does.
+
+An example from daily life: clay is a **translator in an office**. I call the translator on an internal office line (Tailscale, extension 8787). The translator then calls Anthropic on the public phone (the internet). Anthropic sees the office's public number, never my internal extension, because that number means nothing outside the office.
+
+Why this is good:
+
+- Anthropic can't see or reach my private network or port 8787.
+- My Mac never talks to Anthropic directly; my Mac's own proxy (`127.0.0.1:1082`) is not used, because `no_proxy` sends `100.90.238.88` straight through Tailscale.
+- clay has its own extra lock: its config only accepts my Mac (`addr = "100.121.243.64"`). With the Tailscale rules, that's two locks (defense in depth).
+
+A program in the middle like clay is called a **relay** or **proxy**: one side faces the private network, the other faces the internet.
+
+## Names: an SSH shortcut instead of MagicDNS
+
+I wanted to type `ssh server` instead of the IP address. MagicDNS is on for my tailnet, but on my Mac "Use Tailscale DNS" is off (`tailscale dns status`), and the server's name gave a wrong address:
+
+```
+izrj9288xpn81l6b4v1ggkz-2.taile8a7aa.ts.net  →  198.18.0.62   (should be 100.90.238.88)
+```
+
+`198.18.x.x` are **fake addresses** from my Mac's proxy app. It catches every name lookup and answers with its own address so it can route the traffic. This is also why port tests from my Mac say "open" for every port. Fixing it means changing the proxy app's DNS settings, which could break the proxy, so I didn't.
+
+I also found that my old SSH shortcut `alibaba-light` pointed to the public IP, so it broke when I closed public port 22.
+
+The fix: an SSH shortcut in `~/.ssh/config`. The name lives only in SSH's settings, so no DNS lookup happens and the proxy never sees it:
+
+```
+Host alibaba-light server
+    HostName 100.90.238.88
+    # Public IP, only after re-enabling port 22 in the Alibaba firewall:
+    # HostName <public-ip>
+    User root
+    IdentityFile ~/.ssh/<key-file>
+    IdentitiesOnly yes
+    AddKeysToAgent yes
+    UseKeychain yes
+```
+
+- `ssh server` and `ssh alibaba-light` both work now, through Tailscale.
+- `ssh -G server` shows the settings SSH really uses (`hostname 100.90.238.88`, `user root`).
+- The public IP stays as a comment for recovery option 3.
+- The key file stays: Tailscale SSH doesn't need it, but it's the backup if Tailscale SSH is turned off.
+- Renaming the device in the admin console only changes what `tailscale status` shows; it doesn't make names work on this Mac.
+
 ## Exit nodes: "using" vs "offering"
 
 My iPhone's Tailscale app showed an orange bar: **"Running as exit node"**. I first thought the iPhone was *using* an exit node. It was the opposite: the iPhone was *offering* itself as one.
@@ -179,8 +253,6 @@ Offering to be one:     Mac ──▶ iPhone ──▶ internet   (if the Mac ch
 Nothing went through it: an offered exit node is usable only after an admin approves it, and I never did (`tailscale exit-node list` on the Mac said "no exit nodes found"). I tapped **Disable**, because it did nothing useful, costs battery, and if approved by mistake would send the Mac's traffic over the phone's mobile data.
 
 The same screen showed default deny at work: the iPhone's device list had only `iphone172` and `jwc-mac`. The server was missing, because my rules don't let the iPhone reach `tag:server`, so Tailscale doesn't even show it.
-
-**Typo trap:** I first typed `tailscailed`, and it said `inactive`. `systemctl is-active` does not say "no such service"; it just says `inactive`. When one result looks wrong, check the spelling first, or use `systemctl status <name>`, which says `could not be found`.
 
 ## What broke and how I fixed it
 
