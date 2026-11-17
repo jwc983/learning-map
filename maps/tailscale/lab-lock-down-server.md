@@ -28,15 +28,19 @@ The `grants` part of the policy in the Tailscale admin console:
 
 ```json
 "grants": [
-    { "src": ["autogroup:member"], "dst": ["autogroup:self"],     "ip": ["*"] },
-    { "src": ["autogroup:member"], "dst": ["autogroup:internet"], "ip": ["*"] },
-    { "src": ["100.121.243.64"],   "dst": ["tag:server"],         "ip": ["22", "8787"] },
+    { "src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["*"] },
+    { "src": ["100.121.243.64"],   "dst": ["tag:server"],     "ip": ["22", "8787"] },
 ],
 ```
 
 1. My devices can reach each other on any port. `autogroup:self` means "devices owned by the same person". The server belongs to `tag:server` now, not to me, so this rule does **not** cover it.
-2. My devices may use an exit node. I don't use one now, so this rule can be removed.
-3. Only my Mac can reach the server, and only for SSH (22) and Claude Code (8787).
+2. Only my Mac can reach the server, and only for SSH (22) and Claude Code (8787).
+
+I removed a third rule, `"dst": ["autogroup:internet"]`, which allows using an exit node. No device uses one. To use an exit node later, add it back:
+
+```json
+{ "src": ["autogroup:member"], "dst": ["autogroup:internet"], "ip": ["*"] },
+```
 
 The `tests` part runs every time I click Save. If a change would break a test, Save is refused:
 
@@ -63,6 +67,8 @@ The `tests` part runs every time I click Save. If a change would break a test, S
 6. **Turned off key expiry for the server** in the admin console: Machines → `...` → Disable key expiry.
 7. **Turned on Tailscale SSH** (see the section below).
 8. **Restarted the server** to finish an update and test that everything comes back (see "Restart test").
+9. **Added `sshTests`** to protect the `ssh` rules (see the Tailscale SSH section).
+10. **Cleaned up unused openings**: disabled the TCP 80 firewall rule (nothing listens on 80), turned off "Running as exit node" on the iPhone, and removed the `autogroup:internet` grant.
 
 ## Tailscale SSH
 
@@ -112,6 +118,26 @@ Recovery options, easiest first:
 
 Options 2 and 3 need my SSH key file and the server's `authorized_keys`, so I keep them.
 
+### `sshTests`
+
+`tests` ask "**can** this device reach this port?". `sshTests` ask "**may** this user log in to this server **as** this Linux account?". So the source is a user (my Tailscale login), not an IP address:
+
+```json
+"sshTests": [
+    {
+        "src":    "jwc983545@gmail.com",
+        "dst":    ["tag:server"],
+        "accept": ["root"],
+        "deny":   ["clay"],
+    },
+],
+```
+
+- `accept: root` — I must log in as `root` at once, with no browser check.
+- `deny: clay` — nobody may log in as `clay`, the account the Claude Code service runs as. Service accounts are never for logins. This catches a too-wide `"users"` list, such as `autogroup:nonroot`.
+
+Break-it test: I changed the server rule's `"action"` from `accept` to `check` and clicked Save. Save was refused, because the test expects `accept`. I changed it back. Without this test, a switch to `check` would silently break scripts and AI tools that use SSH.
+
 ## Restart test
 
 The login message said `*** System restart required ***`. The reason was a `libc6` update (`/var/run/reboot-required.pkgs`), the basic library almost every program uses. A restart is also the real test of the boot-order risk: will everything come back without me?
@@ -140,6 +166,19 @@ cat /var/run/reboot-required
 ```
 
 Result: all five `active`, and `No such file or directory` (no restart needed anymore). Ports 22, 443, 8080 and 8787 listened on the same addresses as before, and Claude Code worked again.
+
+## Exit nodes: "using" vs "offering"
+
+My iPhone's Tailscale app showed an orange bar: **"Running as exit node"**. I first thought the iPhone was *using* an exit node. It was the opposite: the iPhone was *offering* itself as one.
+
+```
+Using an exit node:     iPhone ──▶ server ──▶ internet
+Offering to be one:     Mac ──▶ iPhone ──▶ internet   (if the Mac chose it)
+```
+
+Nothing went through it: an offered exit node is usable only after an admin approves it, and I never did (`tailscale exit-node list` on the Mac said "no exit nodes found"). I tapped **Disable**, because it did nothing useful, costs battery, and if approved by mistake would send the Mac's traffic over the phone's mobile data.
+
+The same screen showed default deny at work: the iPhone's device list had only `iphone172` and `jwc-mac`. The server was missing, because my rules don't let the iPhone reach `tag:server`, so Tailscale doesn't even show it.
 
 **Typo trap:** I first typed `tailscailed`, and it said `inactive`. `systemctl is-active` does not say "no such service"; it just says `inactive`. When one result looks wrong, check the spelling first, or use `systemctl status <name>`, which says `could not be found`.
 
@@ -175,8 +214,20 @@ Result: all five `active`, and `No such file or directory` (no restart needed an
 - My Mac's key expires on **2027-01-18**. If Claude Code suddenly can't connect around then, log in to Tailscale again on the Mac.
 - To undo the lock-down in an emergency: log in through VNC, or enable the port 22 rule again in the Alibaba Cloud firewall.
 
-## Optional next steps
+## Final setup
 
-- Disable the public **TCP 80** firewall rule. Nothing listens on port 80.
-- Remove the unused `autogroup:internet` rule, if I never use an exit node.
-- Add `sshTests` to the policy, so a bad edit to the `ssh` rules is refused on Save.
+```
+Mac (100.121.243.64)
+  ├── SSH ──Tailscale SSH──▶ server :22     (identity login, no key)
+  └── Claude Code ─────────▶ server :8787   (clay → Anthropic)
+
+iPhone  ✗ can't reach the server (default deny, checked by tests)
+
+Internet
+  ├── :443  ▶ xray      (my proxy)
+  ├── :8080 ▶ caddy     (reading page, password)
+  └── :22, :80  closed
+
+Policy: 2 grants + ssh rules, protected by tests and sshTests
+Emergency: Alibaba VNC
+```
