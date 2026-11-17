@@ -4,7 +4,7 @@
 
 **Generated:** 2026-10-24 · **Lens:** mental model, not manual
 
-*Interpretation: Git the version control system (the tool created for Linux kernel development), not GitHub or other hosting platforms built on top of it.*
+*Interpretation: Git the version control system (the tool created for Linux kernel development), not GitHub or other hosting platforms built on top of it. For hands-on lessons that follow this map in a real repository, see the [lab notes](lab-git-basics.md).*
 
 ## Contents
 
