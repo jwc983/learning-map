@@ -9,8 +9,8 @@ Hands-on lessons that follow the map's **Minimum Mental Model**. The [map](READM
 | 1 | The three areas | Working tree → index → repository | ✅ Done |
 | 2 | A commit is a snapshot with a hash | Snapshot, content hash, commit graph | ✅ Done |
 | 3 | A branch is just a pointer | Refs and HEAD | ✅ Done |
-| 4 | Local vs shared | Remote is a stale view; push and fetch | Next |
-| 5 | Merge and conflict | Merge base; conflict is textual | |
+| 4 | Local vs shared | Remote is a stale view; push and fetch | ✅ Done |
+| 5 | Merge and conflict | Merge base; conflict is textual | Next |
 | 6 | Nothing is lost (almost) | Reflog; revert over rewrite | |
 
 ---
@@ -266,3 +266,138 @@ git -C /tmp/git-lab switch main && cat /tmp/git-lab/notes.txt
 | `git switch main` | `HEAD` changed, and the working tree was rewritten to match `main` |
 
 **A branch is a sticky note with a commit hash on it. `HEAD` is a sticky note saying which sticky note I'm using. Committing moves my sticky note forward.**
+
+---
+
+## Lesson 4: Local vs shared
+
+### Reading my real push
+
+```
+[main 522cbcd] Add Git lab notes for lessons 1 to 3     ← my local main moved to 522cbcd
+531c14f..522cbcd  main -> main                          ← GitHub's main moved from 531c14f to 522cbcd
+```
+
+Push doesn't "upload files". It sends the commits GitHub doesn't have, then moves GitHub's branch pointer forward — the same sticky-note idea, on another computer.
+
+### Three `main` pointers
+
+```
+My Mac                                         GitHub
+──────                                         ──────
+main          → my branch                      main → GitHub's branch
+origin/main   → my NOTE of where GitHub's
+                main was, last time we talked
+```
+
+```
+git log --oneline --decorate -3
+  →  522cbcd (HEAD -> main, origin/main) Add Git lab notes for lessons 1 to 3
+
+cat .git/refs/remotes/origin/main
+  →  522cbcdc9bde46b2e1145c3d85b0d5fd89f80132
+```
+
+- `.git/refs/heads/` holds my branches; `.git/refs/remotes/origin/` holds my notes about GitHub. `origin` is the name for GitHub (`git remote -v`).
+- `origin/main` is a 41-byte file, like a branch. It's **a memory, not a live link**: it changes only when I push or fetch.
+- `git status` compares `main` with that note: same commit → "up to date"; `main` further → `[ahead 1]` (what I saw before my first push).
+
+### Watching the note go stale (sandbox)
+
+To see this without touching real GitHub, the sandbox played both sides:
+
+```
+/tmp/git-lab        ← plays "GitHub" (the shared repo)
+/tmp/git-lab-clone  ← plays "my Mac" (a clone of it)
+```
+
+**Clone:**
+
+```
+git clone -q /tmp/git-lab /tmp/git-lab-clone
+git -C /tmp/git-lab-clone log --oneline --decorate --all
+
+eb43ea8 (origin/experiment) Try an idea
+434ff38 (HEAD -> main, origin/main, origin/HEAD) Second commit
+ac2f828 First commit
+```
+
+- The hashes are **identical** to the original: same contents → same hash. That's how two repos know they share history. Every clone is a complete repository.
+- Only `main` became a local branch. `experiment` exists only as a note, `origin/experiment`.
+- `origin/HEAD` is a note saying "the other repo's default branch is `main`".
+
+**A "teammate" commits to "GitHub":**
+
+```
+echo "teammate line" >> /tmp/git-lab/notes.txt && git -C /tmp/git-lab commit -q -am "Teammate commit"
+git -C /tmp/git-lab-clone status -sb
+  →  ## main...origin/main
+```
+
+No `[behind 1]` — "up to date", which is **wrong**. `git status` doesn't ask the other repo; it only compares `main` with the old note. Like reading yesterday's newspaper: correct about yesterday. This is why "Git said I'm up to date, but my teammate's change isn't here!" happens.
+
+**Fetch updates the note:**
+
+```
+git -C /tmp/git-lab-clone fetch
+  →  434ff38..a77e271  main -> origin/main
+
+git -C /tmp/git-lab-clone status -sb
+  →  ## main...origin/main [behind 1]
+```
+
+Nothing changed on "GitHub" — only the note did, so the comparison became correct. Fetch never touches my own `main` or my files.
+
+| | Direction | Output | What moves |
+| - | --------- | ------ | ---------- |
+| push | my Mac → GitHub | `main -> main` | GitHub's branch |
+| fetch | GitHub → my Mac | `main -> origin/main` | only my note |
+
+**Pull brings the commit into `main`:**
+
+```
+git -C /tmp/git-lab-clone pull
+  →  Updating 434ff38..a77e271
+     Fast-forward
+      notes.txt | 1 +
+
+cat /tmp/git-lab-clone/notes.txt
+  →  hello
+     world
+     teammate line
+```
+
+- `git pull` = `git fetch` + merge `origin/main` into `main`.
+- **Fast-forward**: my `main` had no commits of its own, so Git just moved the pointer forward. No new commit was needed, because nothing had to be combined.
+- "an idea" is **not** in the file: it lives on `experiment`, which isn't part of `main`'s history.
+
+The sandbox now has a **real fork** — both `main` and `experiment` have their own commit after `434ff38`:
+
+```
+ac2f828 ◀── 434ff38 ◀── a77e271  ◀── main, origin/main   (hello, world, teammate line)
+                 ▲
+                 └────── eb43ea8 ◀── origin/experiment    (hello, world, an idea)
+```
+
+Lesson 5 merges them.
+
+### Lesson 4 summary
+
+| I did | What happened |
+| ----- | ------------- |
+| My real `git push` | GitHub's `main` moved (`531c14f..522cbcd main -> main`) |
+| `git log --decorate` | `main` and `origin/main` on the same commit after the push |
+| `cat .git/refs/remotes/origin/main` | `origin/main` is a 41-byte note, not a live link |
+| `git clone` | A full copy; only `main` becomes a local branch, the rest stay notes |
+| Teammate commit, then `status` | Still "up to date" — wrong, because the note was stale |
+| `git fetch` | Only the note moved (`main -> origin/main`); then `[behind 1]` |
+| `git pull` | fetch + merge → fast-forward; `main` moved forward |
+
+| Command | Talks to the other repo? | Moves |
+| ------- | ------------------------ | ----- |
+| `git status` | No | Nothing |
+| `git fetch` | Yes | My notes (`origin/...`) |
+| `git pull` | Yes | Notes + my branch + my files |
+| `git push` | Yes | The other repo's branch |
+
+**`origin/main` is my last memory of GitHub, not GitHub itself. `git status` only compares with that memory. Fetch first, then believe "up to date".**
